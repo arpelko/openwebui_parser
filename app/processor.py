@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from app.chunker import build_chat_text, chunk_messages
 from app.config import load_settings
@@ -22,7 +23,36 @@ from app.writer import ResultWriter
 logger = logging.getLogger(__name__)
 
 
-def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: ResultWriter) -> bool:
+def _get_title(item: dict, fallback_index: int) -> str:
+    return (
+        item.get("title")
+        or item.get("chat", {}).get("title")
+        or f"Nimetön_Keskustelu_{fallback_index}"
+    )
+
+
+def _get_conversation_id(item: dict) -> str | None:
+    return (
+        item.get("id")
+        or item.get("chat_id")
+        or item.get("conversation_id")
+        or item.get("chat", {}).get("id")
+    )
+
+
+def process_file(
+    filepath: str,
+    settings: Any,
+    llm_client_stage1: LLMClient,
+    writer: ResultWriter,
+) -> bool:
+    """
+    Käsittelee yhden input JSON -tiedoston.
+
+    Palauttaa:
+    - True: tiedosto käsiteltiin ilman kriittisiä virheitä
+    - False: tiedostossa oli virheitä tai LLM-kutsuja epäonnistui
+    """
     logger.info("Käsitellään tiedosto: %s", os.path.basename(filepath))
     had_errors = False
 
@@ -30,7 +60,10 @@ def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: 
         data = load_json_file(filepath)
     except Exception as e:
         logger.exception("Virhe luettaessa tiedostoa %s", filepath)
-        writer.write_error(f"{clean_filename(os.path.basename(filepath))}_read_error.txt", str(e))
+        writer.write_error(
+            f"{clean_filename(os.path.basename(filepath))}_read_error.txt",
+            str(e),
+        )
         return False
 
     if not isinstance(data, list):
@@ -39,17 +72,16 @@ def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: 
     for idx_item, item in enumerate(data, start=1):
         if not isinstance(item, dict):
             had_errors = True
+            logger.warning(
+                "Ohitetaan item %s tiedostossa %s, koska se ei ole dict",
+                idx_item,
+                os.path.basename(filepath),
+            )
             continue
 
-        title = item.get("title") or item.get("chat", {}).get("title", f"Nimetön_Keskustelu_{idx_item}")
+        title = _get_title(item, idx_item)
         safe_title = clean_filename(title)
-
-        conversation_id = (
-            item.get("id")
-            or item.get("chat_id")
-            or item.get("conversation_id")
-            or item.get("chat", {}).get("id")
-        )
+        conversation_id = _get_conversation_id(item)
 
         messages = extract_messages(item)
         if not messages:
@@ -59,11 +91,22 @@ def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: 
         chat_text = build_chat_text(messages)
         chunks = chunk_messages(messages, settings.chunk_size_chars)
 
-        logger.info("[%s] Pituus: %s merkkiä -> %s osaa", safe_title, len(chat_text), len(chunks))
+        logger.info(
+            "[%s] Pituus: %s merkkiä -> %s osaa",
+            safe_title,
+            len(chat_text),
+            len(chunks),
+        )
 
         for chunk_idx, chunk in enumerate(chunks, start=1):
             chunk_suffix = f"_Osa{chunk_idx}" if len(chunks) > 1 else ""
-            raw_response = llm_client_stage1.call_stage1(chunk, title, chunk_idx, len(chunks))
+
+            raw_response = llm_client_stage1.call_stage1(
+                text_chunk=chunk,
+                title=title,
+                chunk_idx=chunk_idx,
+                total_chunks=len(chunks),
+            )
 
             if not raw_response:
                 had_errors = True
@@ -73,9 +116,18 @@ def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: 
                 )
                 continue
 
-            raw_path = writer.write_raw_response(safe_title, chunk_suffix, raw_response)
+            raw_path = writer.write_raw_response(
+                safe_title=safe_title,
+                chunk_suffix=chunk_suffix,
+                content=raw_response,
+            )
+
             sections = parse_sections(raw_response)
-            writer.write_sections(safe_title, chunk_suffix, sections)
+            writer.write_sections(
+                safe_title=safe_title,
+                chunk_suffix=chunk_suffix,
+                sections=sections,
+            )
 
             metadata = ProcessMetadata(
                 source_file=os.path.basename(filepath),
@@ -128,8 +180,14 @@ def run() -> None:
         logger.warning("Ei .json tiedostoja kansiossa %s", settings.input_dir)
     else:
         logger.info("Aloitetaan Open WebUI viennin käsittely...")
+
         for filepath in json_files:
-            success = process_file(filepath, settings, llm_client_stage1, writer)
+            success = process_file(
+                filepath=filepath,
+                settings=settings,
+                llm_client_stage1=llm_client_stage1,
+                writer=writer,
+            )
 
             try:
                 if success:
