@@ -1,0 +1,101 @@
+import logging
+import os
+
+from app.chunker import build_chat_text, chunk_messages
+from app.config import load_settings
+from app.extractor import extract_messages
+from app.io_utils import ensure_directories, list_json_files, load_json_file
+from app.llm_client import LLMClient
+from app.logging_setup import setup_logging
+from app.models import ProcessMetadata
+from app.parser import parse_sections
+from app.utils import clean_filename
+from app.writer import ResultWriter
+
+
+logger = logging.getLogger(__name__)
+
+
+def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultWriter) -> None:
+    logger.info("Käsitellään tiedosto: %s", os.path.basename(filepath))
+
+    try:
+        data = load_json_file(filepath)
+    except Exception as e:
+        logger.exception("Virhe luettaessa tiedostoa %s", filepath)
+        writer.write_error(f"{clean_filename(os.path.basename(filepath))}_read_error.txt", str(e))
+        return
+
+    if not isinstance(data, list):
+        data = [data]
+
+    for idx_item, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            continue
+
+        title = item.get("title") or item.get("chat", {}).get("title", f"Nimetön_Keskustelu_{idx_item}")
+        safe_title = clean_filename(title)
+
+        messages = extract_messages(item)
+        if not messages:
+            logger.info("[%s] Ei käsiteltäviä viestejä", safe_title)
+            continue
+
+        chat_text = build_chat_text(messages)
+        chunks = chunk_messages(messages, settings.chunk_size_chars)
+
+        logger.info("[%s] Pituus: %s merkkiä -> %s osaa", safe_title, len(chat_text), len(chunks))
+
+        for chunk_idx, chunk in enumerate(chunks, start=1):
+            chunk_suffix = f"_Osa{chunk_idx}" if len(chunks) > 1 else ""
+            raw_response = llm_client.call(chunk, title, chunk_idx, len(chunks))
+
+            if not raw_response:
+                writer.write_error(
+                    f"{safe_title}{chunk_suffix}_llm_error.txt",
+                    "LLM ei palauttanut sisältöä.",
+                )
+                continue
+
+            raw_path = writer.write_raw_response(safe_title, chunk_suffix, raw_response)
+            sections = parse_sections(raw_response)
+
+            writer.write_sections(safe_title, chunk_suffix, sections)
+
+            metadata = ProcessMetadata(
+                source_file=os.path.basename(filepath),
+                title=title,
+                safe_title=safe_title,
+                chunk_index=chunk_idx,
+                total_chunks=len(chunks),
+                model=settings.llm_model,
+                chunk_length_chars=len(chunk),
+                raw_response_path=raw_path,
+            )
+            writer.write_metadata(safe_title, chunk_suffix, metadata)
+
+
+def run() -> None:
+    settings = load_settings()
+    setup_logging(settings.log_level)
+
+    output_dirs = ensure_directories(settings.output_dir, settings.input_dir)
+    writer = ResultWriter(output_dirs)
+    llm_client = LLMClient(
+        api_key=settings.litellm_api_key,
+        api_base=settings.litellm_api_base,
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        max_output_tokens=settings.llm_max_output_tokens,
+    )
+
+    json_files = list_json_files(settings.input_dir)
+    if not json_files:
+        logger.warning("Ei .json tiedostoja kansiossa %s", settings.input_dir)
+        return
+
+    logger.info("Aloitetaan Open WebUI viennin käsittely...")
+    for filepath in json_files:
+        process_file(filepath, settings, llm_client, writer)
+
+    logger.info("Kaikki tiedostot on käsitelty.")
