@@ -9,8 +9,8 @@ class Settings(BaseModel):
     litellm_api_base: str = Field(alias="LITELLM_API_BASE")
     litellm_api_key: str = Field(alias="LITELLM_API_KEY")
 
-    llm_model_stage1: str = Field(default="openai/gpt-5-nano", alias="LLM_MODEL_STAGE1")
-    llm_model_stage2: str = Field(default="openai/gpt-5-mini", alias="LLM_MODEL_STAGE2")
+    llm_model_stage1: str = Field(default="gpt-5.4-nano", alias="LLM_MODEL_STAGE1")
+    llm_model_stage2: str = Field(default="gpt-5.4-mini", alias="LLM_MODEL_STAGE2")
 
     chunk_size_chars: int = Field(default=18000, alias="CHUNK_SIZE_CHARS")
 
