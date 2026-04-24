@@ -40,5 +40,13 @@ dist/
 *.log
 
 # Project data
-input/*.json
+input/*
+!input/.gitkeep
+
+processed/*
+!processed/.gitkeep
+
+failed/*
+!failed/.gitkeep
+
 output/

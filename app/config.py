@@ -2,7 +2,6 @@ import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
-
 load_dotenv()
 
 
@@ -16,6 +15,8 @@ class Settings(BaseModel):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     input_dir: str = Field(default="./input", alias="INPUT_DIR")
     output_dir: str = Field(default="./output", alias="OUTPUT_DIR")
+    processed_dir: str = Field(default="./processed", alias="PROCESSED_DIR")
+    failed_dir: str = Field(default="./failed", alias="FAILED_DIR")
 
 
 def load_settings() -> Settings:
@@ -29,6 +30,8 @@ def load_settings() -> Settings:
         "LOG_LEVEL": os.getenv("LOG_LEVEL"),
         "INPUT_DIR": os.getenv("INPUT_DIR"),
         "OUTPUT_DIR": os.getenv("OUTPUT_DIR"),
+        "PROCESSED_DIR": os.getenv("PROCESSED_DIR"),
+        "FAILED_DIR": os.getenv("FAILED_DIR"),
     }
 
     try:

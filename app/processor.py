@@ -4,7 +4,12 @@ import os
 from app.chunker import build_chat_text, chunk_messages
 from app.config import load_settings
 from app.extractor import extract_messages
-from app.io_utils import ensure_directories, list_json_files, load_json_file
+from app.io_utils import (
+    ensure_directories,
+    list_json_files,
+    load_json_file,
+    move_file_to_directory,
+)
 from app.llm_client import LLMClient
 from app.logging_setup import setup_logging
 from app.models import ProcessMetadata
@@ -16,21 +21,23 @@ from app.writer import ResultWriter
 logger = logging.getLogger(__name__)
 
 
-def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultWriter) -> None:
+def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultWriter) -> bool:
     logger.info("Käsitellään tiedosto: %s", os.path.basename(filepath))
+    had_errors = False
 
     try:
         data = load_json_file(filepath)
     except Exception as e:
         logger.exception("Virhe luettaessa tiedostoa %s", filepath)
         writer.write_error(f"{clean_filename(os.path.basename(filepath))}_read_error.txt", str(e))
-        return
+        return False
 
     if not isinstance(data, list):
         data = [data]
 
     for idx_item, item in enumerate(data, start=1):
         if not isinstance(item, dict):
+            had_errors = True
             continue
 
         title = item.get("title") or item.get("chat", {}).get("title", f"Nimetön_Keskustelu_{idx_item}")
@@ -51,6 +58,7 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
             raw_response = llm_client.call(chunk, title, chunk_idx, len(chunks))
 
             if not raw_response:
+                had_errors = True
                 writer.write_error(
                     f"{safe_title}{chunk_suffix}_llm_error.txt",
                     "LLM ei palauttanut sisältöä.",
@@ -59,7 +67,6 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
 
             raw_path = writer.write_raw_response(safe_title, chunk_suffix, raw_response)
             sections = parse_sections(raw_response)
-
             writer.write_sections(safe_title, chunk_suffix, sections)
 
             metadata = ProcessMetadata(
@@ -74,12 +81,20 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
             )
             writer.write_metadata(safe_title, chunk_suffix, metadata)
 
+    return not had_errors
+
 
 def run() -> None:
     settings = load_settings()
     setup_logging(settings.log_level)
 
-    output_dirs = ensure_directories(settings.output_dir, settings.input_dir)
+    output_dirs = ensure_directories(
+        settings.output_dir,
+        settings.input_dir,
+        settings.processed_dir,
+        settings.failed_dir,
+    )
+
     writer = ResultWriter(output_dirs)
     llm_client = LLMClient(
         api_key=settings.litellm_api_key,
@@ -96,6 +111,16 @@ def run() -> None:
 
     logger.info("Aloitetaan Open WebUI viennin käsittely...")
     for filepath in json_files:
-        process_file(filepath, settings, llm_client, writer)
+        success = process_file(filepath, settings, llm_client, writer)
+
+        try:
+            if success:
+                moved_to = move_file_to_directory(filepath, settings.processed_dir)
+                logger.info("Tiedosto siirretty processed-kansioon: %s", moved_to)
+            else:
+                moved_to = move_file_to_directory(filepath, settings.failed_dir)
+                logger.warning("Tiedosto siirretty failed-kansioon: %s", moved_to)
+        except Exception:
+            logger.exception("Tiedoston siirto epäonnistui: %s", filepath)
 
     logger.info("Kaikki tiedostot on käsitelty.")
