@@ -14,6 +14,9 @@ def ensure_directories(base_output_dir: str, input_dir: str, processed_dir: str,
         "meta": os.path.join(base_output_dir, "4_Metadata"),
         "virheet": os.path.join(base_output_dir, "5_Virheet"),
         "raw": os.path.join(base_output_dir, "6_RawResponses"),
+        "final_yhteenveto": os.path.join(base_output_dir, "7_Final_Yhteenvedot"),
+        "final_koodi": os.path.join(base_output_dir, "8_Final_Koodit"),
+        "final_kb": os.path.join(base_output_dir, "9_Final_Knowledge_Base"),
     }
 
     os.makedirs(input_dir, exist_ok=True)
@@ -43,6 +46,11 @@ def write_text(path: str, content: str) -> None:
 def write_json(path: str, data: Any) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def read_text(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def move_file_to_directory(filepath: str, target_dir: str) -> str:

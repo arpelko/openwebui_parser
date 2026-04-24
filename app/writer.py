@@ -16,12 +16,7 @@ class ResultWriter:
         write_text(path, content)
         return path
 
-    def write_sections(
-        self,
-        safe_title: str,
-        chunk_suffix: str,
-        sections: ParsedSections,
-    ) -> None:
+    def write_sections(self, safe_title: str, chunk_suffix: str, sections: ParsedSections) -> None:
         if sections.yhteenveto:
             write_text(
                 os.path.join(self.output_dirs["yhteenveto"], f"{safe_title}{chunk_suffix}_Yhteenveto.md"),
@@ -43,3 +38,7 @@ class ResultWriter:
     def write_metadata(self, safe_title: str, chunk_suffix: str, metadata: ProcessMetadata) -> None:
         path = os.path.join(self.output_dirs["meta"], f"{safe_title}{chunk_suffix}_meta.json")
         write_json(path, metadata.__dict__)
+
+    def write_metadata_dict(self, safe_title: str, chunk_suffix: str, metadata: dict) -> None:
+        path = os.path.join(self.output_dirs["meta"], f"{safe_title}{chunk_suffix}_meta.json")
+        write_json(path, metadata)

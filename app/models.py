@@ -34,3 +34,5 @@ class ProcessMetadata:
     model: str
     chunk_length_chars: int
     raw_response_path: Optional[str] = None
+    conversation_id: Optional[str] = None
+    stage: Optional[str] = None

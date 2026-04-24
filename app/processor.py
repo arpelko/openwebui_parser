@@ -3,6 +3,7 @@ import os
 
 from app.chunker import build_chat_text, chunk_messages
 from app.config import load_settings
+from app.consolidator import Consolidator
 from app.extractor import extract_messages
 from app.io_utils import (
     ensure_directories,
@@ -21,7 +22,7 @@ from app.writer import ResultWriter
 logger = logging.getLogger(__name__)
 
 
-def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultWriter) -> bool:
+def process_file(filepath: str, settings, llm_client_stage1: LLMClient, writer: ResultWriter) -> bool:
     logger.info("Käsitellään tiedosto: %s", os.path.basename(filepath))
     had_errors = False
 
@@ -43,6 +44,13 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
         title = item.get("title") or item.get("chat", {}).get("title", f"Nimetön_Keskustelu_{idx_item}")
         safe_title = clean_filename(title)
 
+        conversation_id = (
+            item.get("id")
+            or item.get("chat_id")
+            or item.get("conversation_id")
+            or item.get("chat", {}).get("id")
+        )
+
         messages = extract_messages(item)
         if not messages:
             logger.info("[%s] Ei käsiteltäviä viestejä", safe_title)
@@ -55,7 +63,7 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
 
         for chunk_idx, chunk in enumerate(chunks, start=1):
             chunk_suffix = f"_Osa{chunk_idx}" if len(chunks) > 1 else ""
-            raw_response = llm_client.call(chunk, title, chunk_idx, len(chunks))
+            raw_response = llm_client_stage1.call_stage1(chunk, title, chunk_idx, len(chunks))
 
             if not raw_response:
                 had_errors = True
@@ -75,9 +83,11 @@ def process_file(filepath: str, settings, llm_client: LLMClient, writer: ResultW
                 safe_title=safe_title,
                 chunk_index=chunk_idx,
                 total_chunks=len(chunks),
-                model=settings.llm_model,
+                model=llm_client_stage1.model,
                 chunk_length_chars=len(chunk),
                 raw_response_path=raw_path,
+                conversation_id=conversation_id,
+                stage="stage1",
             )
             writer.write_metadata(safe_title, chunk_suffix, metadata)
 
@@ -96,31 +106,45 @@ def run() -> None:
     )
 
     writer = ResultWriter(output_dirs)
-    llm_client = LLMClient(
+
+    llm_client_stage1 = LLMClient(
         api_key=settings.litellm_api_key,
         api_base=settings.litellm_api_base,
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        max_output_tokens=settings.llm_max_output_tokens,
+        model=settings.llm_model_stage1,
+        temperature=settings.llm_temperature_stage1,
+        max_output_tokens=settings.llm_max_output_tokens_stage1,
+    )
+
+    llm_client_stage2 = LLMClient(
+        api_key=settings.litellm_api_key,
+        api_base=settings.litellm_api_base,
+        model=settings.llm_model_stage2,
+        temperature=settings.llm_temperature_stage2,
+        max_output_tokens=settings.llm_max_output_tokens_stage2,
     )
 
     json_files = list_json_files(settings.input_dir)
     if not json_files:
         logger.warning("Ei .json tiedostoja kansiossa %s", settings.input_dir)
-        return
+    else:
+        logger.info("Aloitetaan Open WebUI viennin käsittely...")
+        for filepath in json_files:
+            success = process_file(filepath, settings, llm_client_stage1, writer)
 
-    logger.info("Aloitetaan Open WebUI viennin käsittely...")
-    for filepath in json_files:
-        success = process_file(filepath, settings, llm_client, writer)
+            try:
+                if success:
+                    moved_to = move_file_to_directory(filepath, settings.processed_dir)
+                    logger.info("Tiedosto siirretty processed-kansioon: %s", moved_to)
+                else:
+                    moved_to = move_file_to_directory(filepath, settings.failed_dir)
+                    logger.warning("Tiedosto siirretty failed-kansioon: %s", moved_to)
+            except Exception:
+                logger.exception("Tiedoston siirto epäonnistui: %s", filepath)
 
-        try:
-            if success:
-                moved_to = move_file_to_directory(filepath, settings.processed_dir)
-                logger.info("Tiedosto siirretty processed-kansioon: %s", moved_to)
-            else:
-                moved_to = move_file_to_directory(filepath, settings.failed_dir)
-                logger.warning("Tiedosto siirretty failed-kansioon: %s", moved_to)
-        except Exception:
-            logger.exception("Tiedoston siirto epäonnistui: %s", filepath)
+    consolidator = Consolidator(
+        llm_client_stage2=llm_client_stage2,
+        output_dirs=output_dirs,
+    )
+    consolidator.run()
 
     logger.info("Kaikki tiedostot on käsitelty.")
